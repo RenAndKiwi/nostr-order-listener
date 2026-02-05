@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { getAllMerchantPubkeys, getMerchant } from './store.js';
 import { deliverWebhook } from './webhook.js';
+import { parseNostrOrder, createBTCPayInvoice } from './btcpay.js';
 import type { NostrEvent } from './types.js';
 
 // Track relay connections
@@ -67,18 +68,27 @@ async function handleEvent(event: NostrEvent, relay: string): Promise<void> {
     const merchant = getMerchant(recipientPubkey);
     
     if (merchant && merchant.enabled) {
-      logger.debug({
+      logger.info({
         eventId: event.id.slice(0, 16) + '...',
         from: event.pubkey.slice(0, 16) + '...',
         to: recipientPubkey.slice(0, 16) + '...',
-      }, 'Forwarding DM to merchant');
+        mode: merchant.btcpay ? 'btcpay' : 'webhook',
+      }, 'Processing order DM');
       
-      // Fire and forget - don't block relay processing
-      deliverWebhook(merchant, event, relay).catch(err => {
-        logger.error({ err, eventId: event.id.slice(0, 16) }, 'Webhook delivery error');
-      });
+      // Handle based on merchant configuration
+      if (merchant.btcpay) {
+        // BTCPay mode - parse order and create invoice
+        handleBTCPayOrder(merchant, event, relay).catch(err => {
+          logger.error({ err, eventId: event.id.slice(0, 16) }, 'BTCPay order processing error');
+        });
+      } else if (merchant.webhookUrl && merchant.webhookSecret) {
+        // Webhook mode - forward raw event
+        deliverWebhook(merchant, event, relay).catch(err => {
+          logger.error({ err, eventId: event.id.slice(0, 16) }, 'Webhook delivery error');
+        });
+      }
       
-      return; // Only deliver once even if multiple p tags match
+      return; // Only process once even if multiple p tags match
     }
   }
   
@@ -87,6 +97,54 @@ async function handleEvent(event: NostrEvent, relay: string): Promise<void> {
     eventId: event.id.slice(0, 16) + '...',
     pTags: pTags.map(p => p.slice(0, 16) + '...'),
   }, 'DM not addressed to any registered merchant');
+}
+
+/**
+ * Handle order via BTCPay integration
+ */
+async function handleBTCPayOrder(
+  merchant: ReturnType<typeof getMerchant>,
+  event: NostrEvent,
+  relay: string
+): Promise<void> {
+  if (!merchant?.btcpay) return;
+  
+  // Parse the order from event content
+  const order = parseNostrOrder(event.content, event.id, event.pubkey);
+  
+  if (!order) {
+    logger.warn({ 
+      eventId: event.id.slice(0, 16) + '...',
+    }, 'Could not parse order from DM content');
+    return;
+  }
+  
+  logger.info({
+    eventId: event.id.slice(0, 16) + '...',
+    orderId: order.orderId,
+    items: order.items.length,
+    customerPubkey: order.customerPubkey.slice(0, 16) + '...',
+  }, 'Parsed Nostr order');
+  
+  // Create BTCPay invoice
+  const invoice = await createBTCPayInvoice(merchant.btcpay, order);
+  
+  if (invoice) {
+    logger.info({
+      eventId: event.id.slice(0, 16) + '...',
+      invoiceId: invoice.id,
+      checkoutLink: invoice.checkoutLink,
+      amount: invoice.amount,
+      currency: invoice.currency,
+    }, 'BTCPay invoice created for Nostr order');
+    
+    // TODO: Optionally send DM back to customer with payment link
+  } else {
+    logger.error({
+      eventId: event.id.slice(0, 16) + '...',
+      orderId: order.orderId,
+    }, 'Failed to create BTCPay invoice');
+  }
 }
 
 /**

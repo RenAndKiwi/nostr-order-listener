@@ -63,22 +63,28 @@ app.post('/api/merchants', async (request, reply) => {
   try {
     const data = RegisterMerchantSchema.parse(request.body);
     
-    const merchant = await registerMerchant(
-      data.pubkey,
-      data.webhookUrl,
-      data.webhookSecret
-    );
+    const merchant = await registerMerchant({
+      pubkey: data.pubkey,
+      name: data.name,
+      webhookUrl: data.webhookUrl,
+      webhookSecret: data.webhookSecret,
+      btcpay: data.btcpay,
+    });
     
     // Refresh relay subscriptions to include new merchant
     refreshSubscriptions();
     
-    logger.info({ pubkey: merchant.pubkey.slice(0, 16) + '...' }, 'Merchant registered via API');
+    logger.info({ 
+      pubkey: merchant.pubkey.slice(0, 16) + '...',
+      mode: merchant.btcpay ? 'btcpay' : 'webhook',
+    }, 'Merchant registered via API');
     
     return {
       success: true,
       merchant: {
         pubkey: merchant.pubkey,
-        webhookUrl: merchant.webhookUrl,
+        name: merchant.name,
+        mode: merchant.btcpay ? 'btcpay' : 'webhook',
         enabled: merchant.enabled,
       },
     };

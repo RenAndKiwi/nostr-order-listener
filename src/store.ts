@@ -86,17 +86,25 @@ async function saveMerchantsToFile(): Promise<void> {
 /**
  * Register a new merchant
  */
-export async function registerMerchant(
-  pubkey: string,
-  webhookUrl: string,
-  webhookSecret: string
-): Promise<Merchant> {
-  const normalizedPubkey = normalizePublicKey(pubkey);
+export async function registerMerchant(options: {
+  pubkey: string;
+  name?: string;
+  webhookUrl?: string;
+  webhookSecret?: string;
+  btcpay?: {
+    url: string;
+    storeId: string;
+    apiKey: string;
+  };
+}): Promise<Merchant> {
+  const normalizedPubkey = normalizePublicKey(options.pubkey);
   
   const merchant: Merchant = {
     pubkey: normalizedPubkey,
-    webhookUrl,
-    webhookSecret,
+    name: options.name,
+    webhookUrl: options.webhookUrl,
+    webhookSecret: options.webhookSecret,
+    btcpay: options.btcpay,
     enabled: true,
     createdAt: Date.now(),
   };
@@ -104,7 +112,11 @@ export async function registerMerchant(
   merchants.set(normalizedPubkey, merchant);
   await saveMerchantsToFile();
   
-  logger.info({ pubkey: normalizedPubkey.slice(0, 16) + '...' }, 'Registered merchant');
+  logger.info({ 
+    pubkey: normalizedPubkey.slice(0, 16) + '...', 
+    name: options.name,
+    mode: options.btcpay ? 'btcpay' : 'webhook',
+  }, 'Registered merchant');
   
   return merchant;
 }
@@ -142,12 +154,19 @@ export function getAllMerchantPubkeys(): string[] {
 }
 
 /**
- * Get all merchants (for API)
+ * Get all merchants (for API - excludes secrets)
  */
-export function getAllMerchants(): Omit<Merchant, 'webhookSecret'>[] {
+export function getAllMerchants(): Array<{
+  pubkey: string;
+  name?: string;
+  mode: 'btcpay' | 'webhook';
+  enabled: boolean;
+  createdAt?: number;
+}> {
   return Array.from(merchants.values()).map(m => ({
     pubkey: m.pubkey,
-    webhookUrl: m.webhookUrl,
+    name: m.name,
+    mode: m.btcpay ? 'btcpay' : 'webhook',
     enabled: m.enabled,
     createdAt: m.createdAt,
   }));

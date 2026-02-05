@@ -28,6 +28,11 @@ export async function deliverWebhook(
   event: NostrEvent,
   relay: string
 ): Promise<boolean> {
+  if (!merchant.webhookUrl || !merchant.webhookSecret) {
+    logger.warn({ eventId: event.id.slice(0, 16) }, 'Merchant missing webhook config');
+    return false;
+  }
+  
   const payload: WebhookPayload = {
     event,
     relay,
