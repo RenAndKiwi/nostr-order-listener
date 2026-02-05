@@ -1,6 +1,43 @@
 # nostr-order-listener
 
-Lightweight Nostr relay listener that forwards NIP-15 marketplace orders to WooCommerce stores.
+Lightweight Nostr relay listener that forwards NIP-15/NIP-99 marketplace orders to WooCommerce stores.
+
+## Quick Start
+
+### Docker (Recommended)
+
+```bash
+docker run -d \
+  --name nostr-listener \
+  -p 3847:3847 \
+  -e ADMIN_TOKEN=$(openssl rand -hex 32) \
+  -e RELAYS="wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band" \
+  ghcr.io/renandkiwi/nostr-order-listener:latest
+```
+
+### Node.js
+
+```bash
+git clone https://github.com/RenAndKiwi/nostr-order-listener.git
+cd nostr-order-listener
+npm install && npm run build
+cp .env.example .env  # Edit with your settings
+npm start
+```
+
+Then register your merchant:
+```bash
+curl -X POST http://localhost:3847/api/merchants \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -d '{
+    "pubkey": "your-merchant-npub-or-hex",
+    "webhookUrl": "https://yourstore.com/wp-json/woo-nostr-market/v1/order-webhook",
+    "webhookSecret": "your-webhook-secret-min-16-chars"
+  }'
+```
+
+---
 
 ## Overview
 
@@ -17,6 +54,20 @@ This service bridges Nostr relays and WordPress/WooCommerce stores running the [
                                                       └──────────────────┘
 ```
 
+## What It Does
+
+1. Connects to Nostr relays via WebSocket
+2. Subscribes to `kind:4` DMs addressed to registered merchant pubkeys
+3. Forwards encrypted events to merchant WordPress webhooks
+4. WordPress decrypts, creates order, sends Lightning invoice back to customer
+
+## What It Doesn't Do
+
+- ❌ Store or see private keys (nsec)
+- ❌ Decrypt order contents
+- ❌ Handle payments or invoices
+- ❌ Log sensitive data
+
 ## Features
 
 - **Multi-merchant support** — One instance serves multiple WooCommerce stores
@@ -26,20 +77,7 @@ This service bridges Nostr relays and WordPress/WooCommerce stores running the [
 - **Relay redundancy** — Subscribes to multiple relays for reliability
 - **Webhook retry** — Retries failed deliveries with exponential backoff
 
-## Requirements
-
-- Node.js 20+
-- A VPS or server with persistent uptime
-- WooCommerce stores with woo-nostr-market plugin installed
-
-## Installation
-
-```bash
-git clone https://github.com/RenAndKiwi/nostr-order-listener.git
-cd nostr-order-listener
-npm install
-cp .env.example .env
-```
+---
 
 ## Configuration
 
@@ -48,20 +86,22 @@ cp .env.example .env
 ```bash
 # .env
 PORT=3847
+HOST=0.0.0.0
 LOG_LEVEL=info
 
-# Default relays (comma-separated)
+# Nostr Relays (comma-separated)
 RELAYS=wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band
 
-# Webhook secret for verifying requests from merchants
-WEBHOOK_SECRET=your-random-secret-here
+# Admin API authentication (generate with: openssl rand -hex 32)
+ADMIN_TOKEN=your-secure-token-here
+
+# Optional: Path to merchants config file
+MERCHANTS_FILE=./merchants.json
 ```
 
 ### Registering Merchants
 
-Merchants register via the REST API or config file:
-
-#### Via API (recommended)
+#### Via API
 
 ```bash
 curl -X POST http://localhost:3847/api/merchants \
@@ -81,115 +121,95 @@ curl -X POST http://localhost:3847/api/merchants \
 {
   "merchants": [
     {
-      "pubkey": "abc123...",
+      "pubkey": "abc123def456...",
       "webhookUrl": "https://store1.com/wp-json/woo-nostr-market/v1/order-webhook",
-      "webhookSecret": "secret1",
-      "enabled": true
-    },
-    {
-      "pubkey": "def456...",
-      "webhookUrl": "https://store2.com/wp-json/woo-nostr-market/v1/order-webhook", 
-      "webhookSecret": "secret2",
+      "webhookSecret": "secret1-min-16-chars",
       "enabled": true
     }
   ]
 }
 ```
 
-## Running
+---
 
-### Development
+## Deployment
 
-```bash
-npm run dev
+### Docker Compose
+
+```yaml
+version: '3.8'
+services:
+  nostr-listener:
+    image: ghcr.io/renandkiwi/nostr-order-listener:latest
+    restart: unless-stopped
+    ports:
+      - "3847:3847"
+    environment:
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
+      - RELAYS=wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band
+    volumes:
+      - ./merchants.json:/app/merchants.json
 ```
 
-### Production
+### Systemd
 
-```bash
-npm run build
-npm start
+```ini
+# /etc/systemd/system/nostr-listener.service
+[Unit]
+Description=Nostr Order Listener
+After=network.target
 
-# Or with PM2
-pm2 start dist/index.js --name nostr-order-listener
+[Service]
+Type=simple
+User=nostr
+WorkingDirectory=/opt/nostr-order-listener
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-### Docker
+### With nginx (SSL)
 
-```bash
-docker build -t nostr-order-listener .
-docker run -d \
-  -p 3847:3847 \
-  -v $(pwd)/merchants.json:/app/merchants.json \
-  -e RELAYS="wss://relay.damus.io,wss://nos.lol" \
-  nostr-order-listener
-```
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name listener.yourdomain.com;
 
-## How It Works
+    ssl_certificate /etc/letsencrypt/live/listener.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/listener.yourdomain.com/privkey.pem;
 
-### 1. Subscription
-
-On startup, the listener:
-1. Loads registered merchant pubkeys
-2. Connects to configured relays via WebSocket
-3. Subscribes to `kind:4` events where `#p` matches any merchant pubkey
-
-```javascript
-// Subscription filter
-{
-  "kinds": [4],
-  "#p": ["pubkey1", "pubkey2", "pubkey3"]
+    location / {
+        proxy_pass http://127.0.0.1:3847;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 }
 ```
 
-### 2. Event Reception
-
-When a kind:4 event arrives:
-1. Check if `#p` tag matches a registered merchant
-2. If yes, forward the **entire encrypted event** to merchant's webhook
-3. Log delivery status (event ID only, never content)
-
-### 3. Webhook Delivery
-
-The listener POSTs to the merchant's WordPress:
-
-```json
-POST /wp-json/woo-nostr-market/v1/order-webhook
-Content-Type: application/json
-X-Webhook-Signature: sha256=...
-
-{
-  "event": {
-    "id": "abc123...",
-    "pubkey": "customer_pubkey...",
-    "created_at": 1706000000,
-    "kind": 4,
-    "tags": [["p", "merchant_pubkey"]],
-    "content": "encrypted_content_here...",
-    "sig": "signature..."
-  },
-  "relay": "wss://relay.damus.io",
-  "receivedAt": 1706000001
-}
-```
-
-### 4. WordPress Processing
-
-The woo-nostr-market plugin:
-1. Verifies webhook signature
-2. Decrypts content using merchant's nsec (NIP-04)
-3. Parses order JSON
-4. Creates WooCommerce order
-5. Generates BTCPay invoice
-6. Sends payment request back via Nostr DM
+---
 
 ## API Endpoints
 
-### `GET /health`
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/health` | GET | No | Health check |
+| `/api/stats` | GET | No | Service statistics |
+| `/api/merchants` | GET | No | List merchants (pubkeys only) |
+| `/api/merchants` | POST | Yes | Register merchant |
+| `/api/merchants/:pubkey` | DELETE | Yes | Remove merchant |
 
-Health check endpoint.
+### Example: Check Stats
 
-### `GET /api/stats`
+```bash
+curl http://localhost:3847/api/stats
+```
 
 ```json
 {
@@ -205,19 +225,9 @@ Health check endpoint.
 }
 ```
 
-### `POST /api/merchants`
+---
 
-Register a new merchant. Requires admin authorization.
-
-### `DELETE /api/merchants/:pubkey`
-
-Remove a merchant registration.
-
-### `GET /api/merchants`
-
-List registered merchants (pubkeys only, no secrets).
-
-## Security
+## Security Model
 
 ### What the listener knows:
 - Merchant public keys (not private keys)
@@ -229,107 +239,76 @@ List registered merchants (pubkeys only, no secrets).
 - Decrypted order contents
 - Customer addresses or contact info
 - Payment details or invoices
-- Private keys
+- Private keys (nsec)
 
 ### Webhook Signature Verification
 
-Every webhook request includes an HMAC signature:
-
+Every webhook includes an HMAC signature:
 ```
-X-Webhook-Signature: sha256=<hmac of request body using merchant's webhookSecret>
+X-Webhook-Signature: sha256=<hmac of body using merchant's webhookSecret>
 ```
 
 WordPress verifies this before processing.
 
-## Logging
-
-By default, logging is minimal:
-
-```
-INFO: Connected to wss://relay.damus.io
-INFO: Subscribed to 5 merchant pubkeys
-INFO: Event abc123 forwarded to store1.com (200 OK)
-WARN: Event def456 delivery failed to store2.com (retry 1/3)
-```
-
-Content is **never logged**. Set `LOG_LEVEL=debug` only for development.
+---
 
 ## WordPress Plugin Setup
 
 In your WordPress admin (WooCommerce → Nostr Market):
 
-1. **Generate or import your Nostr keys** (as usual)
-2. **Enable webhook receiving:**
-   - Go to "Order Receiving" tab
-   - Copy your webhook URL: `https://yourstore.com/wp-json/woo-nostr-market/v1/order-webhook`
-   - Generate a webhook secret
-3. **Register with the listener:**
-   - Provide your pubkey and webhook URL to the listener admin
-   - Or self-host your own listener
+1. Configure your Nostr keys
+2. Go to "Order Receiving" section
+3. Copy your webhook URL
+4. Generate a webhook secret
+5. Register with the listener using the API
 
-## Self-Hosting vs Shared
+See [woo-nostr-market documentation](https://github.com/RenAndKiwi/sovereign-marketplace/tree/main/wordpress-plugin/woo-nostr-market) for full setup.
 
-### Self-Host (Recommended for privacy)
-
-Run your own listener on your VPS. You control everything.
-
-```bash
-# Your VPS
-git clone ... && npm install && npm start
-```
-
-Only register your own merchant pubkey.
-
-### Shared Instance
-
-For convenience, multiple merchants can share one listener instance. The listener operator:
-- Sees which pubkeys are registered
-- Sees event IDs passing through
-- Does NOT see order contents (encrypted)
-- Does NOT handle payments
+---
 
 ## Troubleshooting
 
 ### Orders not arriving
 
-1. Check listener logs: `pm2 logs nostr-order-listener`
+1. Check listener logs for connection status
 2. Verify merchant is registered: `GET /api/merchants`
 3. Check relay connections: `GET /api/stats`
-4. Test webhook endpoint manually:
+4. Test webhook endpoint:
    ```bash
-   curl -X POST https://yourstore.com/wp-json/woo-nostr-market/v1/order-webhook \
-     -H "Content-Type: application/json" \
-     -d '{"test": true}'
+   curl -X POST https://yourstore.com/wp-json/woo-nostr-market/v1/webhook-test
    ```
-
-### Webhook signature failures
-
-1. Ensure `webhookSecret` matches in listener and WordPress
-2. Check for proxy/CDN modifying request body
 
 ### Relay disconnections
 
-The listener auto-reconnects with exponential backoff. Check `GET /api/stats` for connection status.
+The listener auto-reconnects with exponential backoff. Check `/api/stats` for connection status.
+
+### Webhook failures
+
+Check your WordPress error logs. Common issues:
+- Webhook secret mismatch
+- SSL certificate problems
+- WordPress REST API disabled
+
+---
 
 ## Development
 
 ```bash
-# Run tests
-npm test
-
-# Lint
-npm run lint
-
-# Build
-npm run build
+npm run dev      # Watch mode
+npm run build    # Compile TypeScript
+npm run lint     # Lint code
+npm test         # Run tests
 ```
+
+---
 
 ## License
 
 MIT
 
-## Related
+## Links
 
-- [woo-nostr-market](https://github.com/RenAndKiwi/sovereign-marketplace/tree/main/wordpress-plugin/woo-nostr-market) — WordPress plugin
-- [NIP-15 Specification](https://github.com/nostr-protocol/nips/blob/master/15.md) — Nostr Marketplace
-- [NIP-04 Specification](https://github.com/nostr-protocol/nips/blob/master/04.md) — Encrypted Direct Messages
+- [woo-nostr-market WordPress plugin](https://github.com/RenAndKiwi/sovereign-marketplace/tree/main/wordpress-plugin/woo-nostr-market)
+- [NIP-15 Specification](https://github.com/nostr-protocol/nips/blob/master/15.md)
+- [NIP-99 Specification](https://github.com/nostr-protocol/nips/blob/master/99.md)
+- [NIP-04 Specification](https://github.com/nostr-protocol/nips/blob/master/04.md)

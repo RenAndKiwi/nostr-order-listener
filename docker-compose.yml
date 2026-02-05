@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  nostr-listener:
+    build: .
+    container_name: nostr-order-listener
+    restart: unless-stopped
+    ports:
+      - "3847:3847"
+    environment:
+      - PORT=3847
+      - HOST=0.0.0.0
+      - LOG_LEVEL=info
+      - RELAYS=wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
+    volumes:
+      - ./merchants.json:/app/merchants.json:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3847/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
