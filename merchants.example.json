@@ -1,0 +1,10 @@
+{
+  "merchants": [
+    {
+      "pubkey": "abc123def456789012345678901234567890123456789012345678901234abcd",
+      "webhookUrl": "https://yourstore.com/wp-json/woo-nostr-market/v1/order-webhook",
+      "webhookSecret": "your-secret-min-16-chars",
+      "enabled": true
+    }
+  ]
+}
