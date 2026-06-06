@@ -12,6 +12,23 @@ export const config = {
   
   adminToken: process.env.ADMIN_TOKEN || '',
   merchantsFile: process.env.MERCHANTS_FILE || './merchants.json',
+
+  // Nostr identity for publishing
+  nostrPrivateKey: process.env.NOSTR_PRIVATE_KEY || '',
+  nostrPubkey: process.env.NOSTR_PUBKEY || '',
+
+  // WooCommerce connection
+  woocommerce: {
+    url: process.env.WC_URL || '',
+    consumerKey: process.env.WC_CONSUMER_KEY || '',
+    consumerSecret: process.env.WC_CONSUMER_SECRET || '',
+  },
+
+  // Product listing defaults
+  listing: {
+    currency: process.env.LISTING_CURRENCY || 'USD',
+    location: process.env.LISTING_LOCATION || 'Worldwide',
+  },
   
   // Webhook delivery settings
   webhook: {

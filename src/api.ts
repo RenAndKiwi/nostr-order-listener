@@ -10,6 +10,8 @@ import {
 import { refreshSubscriptions, getRelayStats } from './relay.js';
 import { getWebhookStats } from './webhook.js';
 import { RegisterMerchantSchema } from './types.js';
+import { fetchWooCommerceProducts } from './woocommerce.js';
+import { publishProducts, unpublishProducts } from './publish.js';
 
 const startTime = Date.now();
 
@@ -121,6 +123,88 @@ app.delete('/api/merchants/:pubkey', async (request, reply) => {
     logger.error({ err }, 'Failed to remove merchant');
     reply.code(400);
     return { error: err instanceof Error ? err.message : 'Invalid request' };
+  }
+});
+
+// Publish WooCommerce products to Nostr/Shopstr
+app.post('/api/publish', async (request, reply) => {
+  const authHeader = request.headers.authorization;
+  if (!verifyAdminToken(authHeader)) {
+    reply.code(401);
+    return { error: 'Unauthorized' };
+  }
+
+  if (!config.nostrPrivateKey || !config.nostrPubkey) {
+    reply.code(400);
+    return { error: 'NOSTR_PRIVATE_KEY and NOSTR_PUBKEY must be set' };
+  }
+
+  const wc = config.woocommerce;
+  if (!wc.url || !wc.consumerKey || !wc.consumerSecret) {
+    reply.code(400);
+    return { error: 'WC_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET must be set' };
+  }
+
+  try {
+    const products = await fetchWooCommerceProducts(wc);
+    if (!products.length) {
+      return { published: 0, failed: 0, message: 'No products found' };
+    }
+
+    const result = await publishProducts(
+      products,
+      config.nostrPrivateKey,
+      config.nostrPubkey,
+      config.listing.currency,
+      config.listing.location,
+    );
+
+    return { ...result, total: products.length, relays: config.relays };
+  } catch (err) {
+    logger.error({ err }, 'Publish failed');
+    reply.code(500);
+    return { error: err instanceof Error ? err.message : 'Publish failed' };
+  }
+});
+
+// Unpublish WooCommerce products from Nostr/Shopstr
+app.post('/api/unpublish', async (request, reply) => {
+  const authHeader = request.headers.authorization;
+  if (!verifyAdminToken(authHeader)) {
+    reply.code(401);
+    return { error: 'Unauthorized' };
+  }
+
+  if (!config.nostrPrivateKey || !config.nostrPubkey) {
+    reply.code(400);
+    return { error: 'NOSTR_PRIVATE_KEY and NOSTR_PUBKEY must be set' };
+  }
+
+  const wc = config.woocommerce;
+  if (!wc.url || !wc.consumerKey || !wc.consumerSecret) {
+    reply.code(400);
+    return { error: 'WC_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET must be set' };
+  }
+
+  try {
+    const products = await fetchWooCommerceProducts(wc);
+    if (!products.length) {
+      return { unpublished: 0, failed: 0, message: 'No products found' };
+    }
+
+    const result = await unpublishProducts(
+      products,
+      config.nostrPrivateKey,
+      config.nostrPubkey,
+      config.listing.currency,
+      config.listing.location,
+    );
+
+    return { ...result, total: products.length };
+  } catch (err) {
+    logger.error({ err }, 'Unpublish failed');
+    reply.code(500);
+    return { error: err instanceof Error ? err.message : 'Unpublish failed' };
   }
 });
 
