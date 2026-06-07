@@ -4,6 +4,7 @@ import { logger } from './logger.js';
 import { getAllMerchantPubkeys, getMerchant } from './store.js';
 import { deliverWebhook } from './webhook.js';
 import { parseNostrOrder, createBTCPayInvoice } from './btcpay.js';
+import { decryptNip04 } from './decrypt.js';
 import type { NostrEvent } from './types.js';
 
 // Track relay connections
@@ -108,9 +109,22 @@ async function handleBTCPayOrder(
   relay: string
 ): Promise<void> {
   if (!merchant?.btcpay) return;
-  
+
+  // Decrypt NIP-04 DM content
+  let content = event.content;
+  if (config.nostrPrivateKey && content.includes('?iv=')) {
+    const decrypted = await decryptNip04(content, config.nostrPrivateKey, event.pubkey);
+    if (decrypted) {
+      content = decrypted;
+      logger.debug({ eventId: event.id.slice(0, 16) }, 'Decrypted NIP-04 DM');
+    } else {
+      logger.warn({ eventId: event.id.slice(0, 16) }, 'Failed to decrypt NIP-04 DM');
+      return;
+    }
+  }
+
   // Parse the order from event content
-  const order = parseNostrOrder(event.content, event.id, event.pubkey);
+  const order = parseNostrOrder(content, event.id, event.pubkey);
   
   if (!order) {
     logger.warn({ 
