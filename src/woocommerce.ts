@@ -24,16 +24,13 @@ export interface WcProduct {
 export async function fetchWooCommerceProducts(wc: WcConfig): Promise<WcProduct[]> {
   const products: WcProduct[] = [];
   const baseUrl = wc.url.replace(/\/+$/, '');
-  const auth = Buffer.from(`${wc.consumerKey}:${wc.consumerSecret}`).toString('base64');
   let page = 1;
 
   while (true) {
-    const url = `${baseUrl}/wp-json/wc/v3/products?status=publish&per_page=100&page=${page}`;
+    const url = `${baseUrl}/wp-json/wc/v3/products?status=publish&per_page=100&page=${page}&consumer_key=${encodeURIComponent(wc.consumerKey)}&consumer_secret=${encodeURIComponent(wc.consumerSecret)}`;
 
     try {
-      const res = await fetch(url, {
-        headers: { Authorization: `Basic ${auth}` },
-      });
+      const res = await fetch(url);
 
       if (!res.ok) {
         const err = await res.text();
