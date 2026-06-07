@@ -1,18 +1,69 @@
 # nostr-order-listener
 
-Lightweight Nostr relay listener that forwards NIP-15/NIP-99 marketplace orders to WooCommerce stores.
+Nostr relay listener that bridges NIP-15 marketplace orders to WooCommerce stores, with built-in product publishing to the Shopstr marketplace.
+
+## Features
+
+- **Order Listening** — Subscribes to Nostr relays for kind:4 DMs addressed to registered merchant pubkeys, forwards orders to WooCommerce via webhooks or creates BTCPay invoices directly
+- **Product Publishing** — Fetches products from WooCommerce REST API and publishes them as kind:30402 (NIP-15) product listing events to Nostr relays, compatible with [Shopstr](https://shopstr.market)
+- **Multi-merchant support** — One instance serves multiple WooCommerce stores
+- **BTCPay integration** — Create invoices directly via BTCPay Server API
+- **Relay redundancy** — Subscribes to multiple relays with auto-reconnect
+- **Webhook retry** — Retries failed deliveries with exponential backoff
+
+## Architecture
+
+```
+┌──────────────┐      ┌──────────────────────┐      ┌──────────────────┐
+│ WooCommerce  │◀────▶│  nostr-order-listener │◀────▶│  Nostr Relays    │
+│ (products +  │      │                      │      │                  │
+│  orders)     │      │  • publishes products │      │  kind:30402      │
+│              │      │  • listens for orders │      │  (listings)      │
+│ BTCPay Server│◀─────│  • creates invoices   │      │  kind:4 (orders) │
+└──────────────┘      └──────────────────────┘      └──────────────────┘
+                                                           ▲
+                                                           │
+                                                    ┌──────┴───────┐
+                                                    │   Shopstr    │
+                                                    │  Marketplace │
+                                                    └──────────────┘
+```
 
 ## Quick Start
 
-### Docker (Recommended)
+### Docker Compose (Recommended)
+
+```yaml
+services:
+  nostr-listener:
+    build: .
+    container_name: nostr-order-listener
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3847:3847"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    environment:
+      - PORT=3847
+      - HOST=0.0.0.0
+      - LOG_LEVEL=info
+      - RELAYS=wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band
+      - ADMIN_TOKEN=your-secure-token-here
+      # Product publishing (optional)
+      - NOSTR_PRIVATE_KEY=your-64-char-hex-private-key
+      - NOSTR_PUBKEY=your-64-char-hex-public-key
+      - WC_URL=https://your-woocommerce-store.com
+      - WC_CONSUMER_KEY=ck_your_key
+      - WC_CONSUMER_SECRET=cs_your_secret
+      - LISTING_CURRENCY=USD
+      - LISTING_LOCATION=Worldwide
+    volumes:
+      - ./merchants.json:/app/merchants.json:ro
+```
 
 ```bash
-docker run -d \
-  --name nostr-listener \
-  -p 3847:3847 \
-  -e ADMIN_TOKEN=$(openssl rand -hex 32) \
-  -e RELAYS="wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band" \
-  ghcr.io/renandkiwi/nostr-order-listener:latest
+docker compose up -d
 ```
 
 ### Node.js
@@ -25,173 +76,37 @@ cp .env.example .env  # Edit with your settings
 npm start
 ```
 
-Then register your merchant:
-```bash
-curl -X POST http://localhost:3847/api/merchants \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
-  -d '{
-    "pubkey": "your-merchant-npub-or-hex",
-    "webhookUrl": "https://yourstore.com/wp-json/woo-nostr-market/v1/order-webhook",
-    "webhookSecret": "your-webhook-secret-min-16-chars"
-  }'
-```
-
----
-
-## Overview
-
-This service bridges Nostr relays and WordPress/WooCommerce stores running the [woo-nostr-market](https://github.com/RenAndKiwi/sovereign-marketplace/tree/main/wordpress-plugin/woo-nostr-market) plugin.
-
-**Key principle:** The listener **never sees decrypted orders** and **never handles payments**. It forwards encrypted Nostr events to your WordPress, which decrypts and processes them using your keys.
-
-```
-┌──────────────────┐     ┌─────────────────────┐     ┌──────────────────┐
-│  Nostr Relays    │────▶│  nostr-order-listener│────▶│  Your WordPress  │
-│  (kind:4 DMs)    │     │  (forwards events)   │     │  (decrypts,      │
-└──────────────────┘     └─────────────────────┘     │   creates order) │
-                                                      │  + BTCPay Server │
-                                                      └──────────────────┘
-```
-
-## What It Does
-
-1. Connects to Nostr relays via WebSocket
-2. Subscribes to `kind:4` DMs addressed to registered merchant pubkeys
-3. Forwards encrypted events to merchant WordPress webhooks
-4. WordPress decrypts, creates order, sends Lightning invoice back to customer
-
-## What It Doesn't Do
-
-- ❌ Store or see private keys (nsec)
-- ❌ Decrypt order contents
-- ❌ Handle payments or invoices
-- ❌ Log sensitive data
-
-## Features
-
-- **Multi-merchant support** — One instance serves multiple WooCommerce stores
-- **Zero key custody** — Merchants keep their private keys in WordPress
-- **No payment handling** — Each merchant uses their own BTCPay Server
-- **Minimal logging** — Only logs event IDs and delivery status, never content
-- **Relay redundancy** — Subscribes to multiple relays for reliability
-- **Webhook retry** — Retries failed deliveries with exponential backoff
-
 ---
 
 ## Configuration
 
 ### Environment Variables
 
-```bash
-# .env
-PORT=3847
-HOST=0.0.0.0
-LOG_LEVEL=info
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | `3847` | API server port |
+| `HOST` | No | `0.0.0.0` | API server host |
+| `LOG_LEVEL` | No | `info` | Log level (debug, info, warn, error) |
+| `RELAYS` | No | `wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band` | Comma-separated relay URLs |
+| `ADMIN_TOKEN` | Yes | — | Bearer token for admin API endpoints |
+| `MERCHANTS_FILE` | No | `./merchants.json` | Path to merchants config |
+| `NOSTR_PRIVATE_KEY` | For publishing | — | 64-char hex private key (not nsec) |
+| `NOSTR_PUBKEY` | For publishing | — | 64-char hex public key |
+| `WC_URL` | For publishing | — | WooCommerce store URL (must match WordPress `siteurl`) |
+| `WC_CONSUMER_KEY` | For publishing | — | WooCommerce REST API consumer key |
+| `WC_CONSUMER_SECRET` | For publishing | — | WooCommerce REST API consumer secret |
+| `LISTING_CURRENCY` | No | `USD` | Currency code for product listings |
+| `LISTING_LOCATION` | No | `Worldwide` | Location tag for product listings |
 
-# Nostr Relays (comma-separated)
-RELAYS=wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band
+### Important Notes
 
-# Admin API authentication (generate with: openssl rand -hex 32)
-ADMIN_TOKEN=your-secure-token-here
-
-# Optional: Path to merchants config file
-MERCHANTS_FILE=./merchants.json
-```
-
-### Registering Merchants
-
-#### Via API
-
-```bash
-curl -X POST http://localhost:3847/api/merchants \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
-  -d '{
-    "pubkey": "npub1abc...",
-    "webhookUrl": "https://yourstore.com/wp-json/woo-nostr-market/v1/order-webhook",
-    "webhookSecret": "merchant-specific-secret"
-  }'
-```
-
-#### Via Config File
-
-```json
-// merchants.json
-{
-  "merchants": [
-    {
-      "pubkey": "abc123def456...",
-      "webhookUrl": "https://store1.com/wp-json/woo-nostr-market/v1/order-webhook",
-      "webhookSecret": "secret1-min-16-chars",
-      "enabled": true
-    }
-  ]
-}
-```
-
----
-
-## Deployment
-
-### Docker Compose
-
-```yaml
-version: '3.8'
-services:
-  nostr-listener:
-    image: ghcr.io/renandkiwi/nostr-order-listener:latest
-    restart: unless-stopped
-    ports:
-      - "3847:3847"
-    environment:
-      - ADMIN_TOKEN=${ADMIN_TOKEN}
-      - RELAYS=wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band
-    volumes:
-      - ./merchants.json:/app/merchants.json
-```
-
-### Systemd
-
-```ini
-# /etc/systemd/system/nostr-listener.service
-[Unit]
-Description=Nostr Order Listener
-After=network.target
-
-[Service]
-Type=simple
-User=nostr
-WorkingDirectory=/opt/nostr-order-listener
-ExecStart=/usr/bin/node dist/index.js
-Restart=always
-RestartSec=10
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### With nginx (SSL)
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name listener.yourdomain.com;
-
-    ssl_certificate /etc/letsencrypt/live/listener.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/listener.yourdomain.com/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:3847;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
+- **`NOSTR_PRIVATE_KEY`** must be in hex format (64 characters). If you have an nsec, convert it first:
+  ```bash
+  node -e "const {nip19} = require('nostr-tools'); console.log(Buffer.from(nip19.decode('nsec1...').data).toString('hex'))"
+  ```
+- **`WC_URL`** must match your WordPress `siteurl` option exactly (e.g. `https://shop.example.com`), not the server IP. WooCommerce rejects API requests that don't match.
+- **WooCommerce API keys** need **Read/Write** permissions and must be created by an Administrator user.
+- When running Docker with systemd-resolved (Ubuntu), add `dns: [8.8.8.8, 1.1.1.1]` to your compose file to avoid DNS resolution failures inside the container.
 
 ---
 
@@ -202,105 +117,84 @@ server {
 | `/health` | GET | No | Health check |
 | `/api/stats` | GET | No | Service statistics |
 | `/api/merchants` | GET | No | List merchants (pubkeys only) |
-| `/api/merchants` | POST | Yes | Register merchant |
-| `/api/merchants/:pubkey` | DELETE | Yes | Remove merchant |
+| `/api/merchants` | POST | Bearer | Register merchant |
+| `/api/merchants/:pubkey` | DELETE | Bearer | Remove merchant |
+| `/api/publish` | POST | Bearer | Publish WooCommerce products to Nostr/Shopstr |
+| `/api/unpublish` | POST | Bearer | Remove product listings from Nostr/Shopstr |
 
-### Example: Check Stats
+### Publish Products
 
 ```bash
-curl http://localhost:3847/api/stats
+curl -X POST http://localhost:3847/api/publish \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
 ```
 
+Response:
 ```json
 {
-  "uptime": 86400,
-  "merchants": 5,
-  "eventsReceived": 1234,
-  "eventsForwarded": 1200,
-  "eventsFailed": 34,
-  "relayConnections": {
-    "wss://relay.damus.io": "connected",
-    "wss://nos.lol": "connected"
-  }
+  "published": 16,
+  "failed": 0,
+  "total": 16,
+  "relays": ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.nostr.band"]
 }
 ```
 
----
+### Register Merchant (Order Listening)
 
-## Security Model
-
-### What the listener knows:
-- Merchant public keys (not private keys)
-- Webhook URLs
-- Event IDs that were forwarded
-- Delivery success/failure status
-
-### What the listener NEVER sees:
-- Decrypted order contents
-- Customer addresses or contact info
-- Payment details or invoices
-- Private keys (nsec)
-
-### Webhook Signature Verification
-
-Every webhook includes an HMAC signature:
-```
-X-Webhook-Signature: sha256=<hmac of body using merchant's webhookSecret>
+```bash
+curl -X POST http://localhost:3847/api/merchants \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -d '{
+    "pubkey": "npub1...",
+    "webhookUrl": "https://yourstore.com/wp-json/woo-nostr-market/v1/order-webhook",
+    "webhookSecret": "your-webhook-secret-min-16-chars"
+  }'
 ```
 
-WordPress verifies this before processing.
+Or with BTCPay direct integration:
+```bash
+curl -X POST http://localhost:3847/api/merchants \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -d '{
+    "pubkey": "npub1...",
+    "btcpay": {
+      "url": "https://your-btcpay.com",
+      "storeId": "your-store-id",
+      "apiKey": "your-api-key"
+    }
+  }'
+```
 
 ---
 
-## WordPress Plugin Setup
+## Relay Alignment
 
-In your WordPress admin (WooCommerce → Nostr Market):
+For Shopstr integration to work, the relays used by this listener **must match** the relays configured in your BTCPay Nostr plugin. Both product listings (kind:30402) and order DMs (kind:4) need to be on the same relays.
 
-1. Configure your Nostr keys
-2. Go to "Order Receiving" section
-3. Copy your webhook URL
-4. Generate a webhook secret
-5. Register with the listener using the API
-
-See [woo-nostr-market documentation](https://github.com/RenAndKiwi/sovereign-marketplace/tree/main/wordpress-plugin/woo-nostr-market) for full setup.
+Default relays: `wss://relay.damus.io`, `wss://nos.lol`, `wss://relay.nostr.band`
 
 ---
 
-## Troubleshooting
+## Security
 
-### Orders not arriving
-
-1. Check listener logs for connection status
-2. Verify merchant is registered: `GET /api/merchants`
-3. Check relay connections: `GET /api/stats`
-4. Test webhook endpoint:
-   ```bash
-   curl -X POST https://yourstore.com/wp-json/woo-nostr-market/v1/webhook-test
-   ```
-
-### Relay disconnections
-
-The listener auto-reconnects with exponential backoff. Check `/api/stats` for connection status.
-
-### Webhook failures
-
-Check your WordPress error logs. Common issues:
-- Webhook secret mismatch
-- SSL certificate problems
-- WordPress REST API disabled
+- The listener never stores or sees private keys (nsec)
+- Order contents are forwarded as encrypted kind:4 events — decryption happens in WordPress
+- Webhook deliveries are HMAC-signed (`X-Webhook-Signature: sha256=...`)
+- The `NOSTR_PRIVATE_KEY` for publishing is only used to sign product listing events
+- Admin endpoints require Bearer token authentication
 
 ---
 
 ## Development
 
 ```bash
-npm run dev      # Watch mode
+npm run dev      # Watch mode with tsx
 npm run build    # Compile TypeScript
 npm run lint     # Lint code
 npm test         # Run tests
 ```
-
----
 
 ## License
 
@@ -308,7 +202,6 @@ MIT
 
 ## Links
 
-- [woo-nostr-market WordPress plugin](https://github.com/RenAndKiwi/sovereign-marketplace/tree/main/wordpress-plugin/woo-nostr-market)
+- [Shopstr Marketplace](https://shopstr.market)
+- [nostr-order-bridge](https://github.com/RenAndKiwi/nostr-order-bridge) — Merchant onboarding/registration companion
 - [NIP-15 Specification](https://github.com/nostr-protocol/nips/blob/master/15.md)
-- [NIP-99 Specification](https://github.com/nostr-protocol/nips/blob/master/99.md)
-- [NIP-04 Specification](https://github.com/nostr-protocol/nips/blob/master/04.md)
