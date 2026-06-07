@@ -28,6 +28,7 @@ export const config = {
   listing: {
     currency: process.env.LISTING_CURRENCY || 'USD',
     location: process.env.LISTING_LOCATION || 'Worldwide',
+    shipping: (process.env.LISTING_SHIPPING || 'Domestic,International').split(',').map(s => s.trim()).filter(Boolean),
   },
   
   // Webhook delivery settings

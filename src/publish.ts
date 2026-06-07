@@ -31,6 +31,10 @@ function buildProductEvent(
     ['client', 'BTCPayServer-Shopstr', `31990:${pubkeyHex}:nostr-order-listener`],
   ];
 
+  for (const method of config.listing.shipping) {
+    tags.push(['shipping', method]);
+  }
+
   if (image) tags.push(['image', image]);
   if (product.stock_quantity != null) tags.push(['quantity', product.stock_quantity.toString()]);
   if (product.categories?.length) {
