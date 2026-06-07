@@ -25,7 +25,7 @@ function buildProductEvent(
     ['summary', description],
     ['price', product.price || product.regular_price || '0', currency],
     ['location', location],
-    ['status', product.in_stock ? 'active' : 'sold'],
+    ['status', (product.stock_status === 'instock' || product.in_stock) ? 'active' : 'sold'],
     ['t', 'shopstr'],
     ['published_at', now.toString()],
     ['client', 'BTCPayServer-Shopstr', `31990:${pubkeyHex}:nostr-order-listener`],

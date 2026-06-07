@@ -16,6 +16,7 @@ export interface WcProduct {
   regular_price: string;
   stock_quantity: number | null;
   in_stock: boolean;
+  stock_status: string;
   images: Array<{ src: string }>;
   categories: Array<{ name: string }>;
   sku: string;
