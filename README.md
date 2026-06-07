@@ -58,8 +58,9 @@ services:
       - WC_CONSUMER_SECRET=cs_your_secret
       - LISTING_CURRENCY=USD
       - LISTING_LOCATION=Worldwide
+      - LISTING_SHIPPING=Domestic,International
     volumes:
-      - ./merchants.json:/app/merchants.json:ro
+      - ./merchants.json:/app/merchants.json
 ```
 
 ```bash
@@ -97,6 +98,7 @@ npm start
 | `WC_CONSUMER_SECRET` | For publishing | — | WooCommerce REST API consumer secret |
 | `LISTING_CURRENCY` | No | `USD` | Currency code for product listings |
 | `LISTING_LOCATION` | No | `Worldwide` | Location tag for product listings |
+| `LISTING_SHIPPING` | No | `Domestic,International` | Comma-separated shipping methods |
 
 ### Important Notes
 
@@ -106,6 +108,8 @@ npm start
   ```
 - **`WC_URL`** must match your WordPress `siteurl` option exactly (e.g. `https://shop.example.com`), not the server IP. WooCommerce rejects API requests that don't match.
 - **WooCommerce API keys** need **Read/Write** permissions and must be created by an Administrator user.
+- **`NOSTR_PRIVATE_KEY`** is also required for **receiving orders** — incoming kind:4 DMs are NIP-04 encrypted and must be decrypted before parsing.
+- **`merchants.json`** must be mounted **without** `:ro` (read-only) so merchant registrations persist across container rebuilds.
 - When running Docker with systemd-resolved (Ubuntu), add `dns: [8.8.8.8, 1.1.1.1]` to your compose file to avoid DNS resolution failures inside the container.
 
 ---
